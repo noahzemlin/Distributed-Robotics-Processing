@@ -6,13 +6,14 @@ import random
 import select
 import socket
 import struct
+import datetime
 from queue import Queue, Empty
 from enum import Enum
 from threading import Thread, Lock
 
 # Configuration
-HOST = "127.0.0.1"
-PORT = 9000 + random.randint(1, 100)
+HOST = "107.191.45.76"
+PORT = 60055
 
 # Define Enums used for networking
 class TopicType(Enum):
@@ -258,7 +259,7 @@ class M_Robot(Machine):
 
     def recv(self, recv_vals):
         '''Handle receiving messages'''
-        (msg_type, topic, data) = recv_vals
+        (_, topic, data) = recv_vals
 
         if topic == TopicType.COMMAND.value:
             l,r = struct.unpack("f f 120x", data)
@@ -271,7 +272,7 @@ class M_Robot(Machine):
         self.server.start()
 
         # Subscribe robot to movement commands
-        # This is kinda hacky and prob could be improved
+        # This is a hack and could be improved
         self.server.subscriptions[TopicType.COMMAND.value] = [self.server.socket]
 
         while self.running.locked():
@@ -283,6 +284,9 @@ class M_Robot(Machine):
         self.server.running.release()
         self.logger.info("Done!")
 
+message_was_sent_at = None
+confirm_x_dot = 0
+
 class M_EKF(Machine):
     def __init__(self):
         '''EKF thread'''
@@ -291,7 +295,7 @@ class M_EKF(Machine):
 
     def recv(self, recv_vals):
         '''Handle receiving messages'''
-        (msg_type, topic, data) = recv_vals
+        (_, topic, data) = recv_vals
 
         if topic == TopicType.STATE.value:
             # Update state based on incoming update (only care about x and y here, we compute x_dot an y_dot)
@@ -300,6 +304,7 @@ class M_EKF(Machine):
             self.state["y"] = y
         
     def run(self):
+        global message_was_sent_at, confirm_x_dot
         '''Ran when thread is started'''
         self.logger.info("Running")
         self.socket.start()
@@ -310,14 +315,16 @@ class M_EKF(Machine):
         last_x = self.state["x"]
         last_y = self.state["y"]
         while self.running.locked():
-            time.sleep(0.5)
-            # This is the worst EKF ever, but good enough for this project
+            time.sleep(2)
+            # This is the worst EKF ever, but good enough for experimentation
             self.state["x_dot"] = (self.state["x"] - last_x) / 0.5
             self.state["y_dot"] = (self.state["y"] - last_y) / 0.5
             last_x = self.state["x"]
             last_y = self.state["y"]
             self.publish(TopicType.EKF_OUT, struct.pack('f f f f 112x', self.state["x"], self.state["y"], self.state["x_dot"], self.state["y_dot"]))
             self.logger.info(f"New state: {self.state}")
+            message_was_sent_at = datetime.datetime.now()
+            confirm_x_dot = self.state["x_dot"]
 
         self.socket.running.release()
         self.logger.info("Done!")
@@ -330,7 +337,7 @@ class M_PathPlanning(Machine):
 
     def recv(self, recv_vals):
         '''Handle receiving messages'''
-        (msg_type, topic, data) = recv_vals
+        (_, topic, data) = recv_vals
 
         if topic == TopicType.EKF_OUT.value:
             # Update state based on incoming update
@@ -343,6 +350,7 @@ class M_PathPlanning(Machine):
             }
         
     def run(self):
+        global message_was_sent_at, confirm_x_dot
         '''Ran when thread is started'''
         self.logger.info("Running")
         self.socket.start()
@@ -351,17 +359,19 @@ class M_PathPlanning(Machine):
         self.subscribe(TopicType.EKF_OUT)
         
         while self.running.locked():
-            time.sleep(0.5)
+            time.sleep(0.1)
 
             # Create command based on state
             self.publish(TopicType.COMMAND, struct.pack('f f 120x', -self.state["x_dot"]/10, -self.state["y_dot"]/10))
-
+            if message_was_sent_at is not None and confirm_x_dot == self.state["x_dot"]:
+                self.logger.debug(f"EKF to Command: {(datetime.datetime.now() - message_was_sent_at).total_seconds() * 1000}")
+                message_was_sent_at = None
+            
         self.socket.running.release()
         self.logger.info("Done!")
 
 # Globally defined threads (for handling KeyboardInterrupt)
 threads = {
-    "M_Robot": M_Robot(),
     "M_EKF": M_EKF(),
     "M_PathPlanning": M_PathPlanning()
 }
@@ -369,14 +379,14 @@ threads = {
 def main():
     print("Starting threads...")
 
-    for thrd in threads:
-        threads[thrd].start()
+    for thread in threads:
+        threads[thread].start()
         time.sleep(1) # Wait to give time for each thread to setup
 
     print("Threads started!")
 
-    for thrd in threads:
-        threads[thrd].join()
+    for thread in threads:
+        threads[thread].join()
 
     print("Threads finished!")
 
@@ -387,7 +397,7 @@ if __name__ == "__main__":
         print('\nKeyboard Interrupt Called')
         try:
             # On keyboard interrupt, stop all threads
-            for thrd in threads:
-                threads[thrd].running.release()
+            for thread in threads:
+                threads[thread].running.release()
         except SystemExit:
             os._exit(0)
