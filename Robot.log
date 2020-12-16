@@ -1,0 +1,30 @@
+[ 08:39:24 INFO Robot ] Started
+[ 08:39:24 INFO Robot ] Running
+[ 08:39:25 INFO Robot ] ('127.0.0.1', 58180) connected.
+[ 08:39:25 INFO Robot ] Received type 2 with topic 0
+[ 08:39:25 INFO Robot ] Received type 3 with topic 1
+[ 08:39:25 WARNING Robot ] ('127.0.0.1', 58180) attempting to publish to topic 1 which has no subscribers.
+[ 08:39:26 INFO Robot ] ('127.0.0.1', 58182) connected.
+[ 08:39:26 INFO Robot ] Received type 2 with topic 1
+[ 08:39:26 INFO Robot ] Received type 3 with topic 1
+[ 08:39:26 INFO Robot ] Received type 3 with topic 2
+[ 08:39:26 INFO Robot ] Setting motor speeds to -1.5498464107513428,-2.2774581909179688
+[ 08:39:26 INFO Robot ] Received type 3 with topic 1
+[ 08:39:27 INFO Robot ] Received type 3 with topic 2
+[ 08:39:27 INFO Robot ] Setting motor speeds to -0.20818062126636505,-0.22740516066551208
+[ 08:39:27 INFO Robot ] Received type 3 with topic 1
+[ 08:39:27 INFO Robot ] Received type 3 with topic 2
+[ 08:39:27 INFO Robot ] Setting motor speeds to -0.18476924300193787,-0.20414486527442932
+[ 08:39:27 INFO Robot ] Received type 3 with topic 1
+[ 08:39:28 INFO Robot ] Received type 3 with topic 2
+[ 08:39:28 INFO Robot ] Setting motor speeds to -0.42491015791893005,-0.9986055493354797
+[ 08:39:28 INFO Robot ] Received type 3 with topic 1
+[ 08:39:28 INFO Robot ] Received type 3 with topic 2
+[ 08:39:28 INFO Robot ] Setting motor speeds to -0.06080455705523491,-0.21938323974609375
+[ 08:39:28 INFO Robot ] Received type 3 with topic 1
+[ 08:39:29 INFO Robot ] Received type 3 with topic 2
+[ 08:39:29 INFO Robot ] Setting motor speeds to -0.4833931028842926,-0.8044494390487671
+[ 08:39:29 INFO Robot ] Received type 3 with topic 1
+[ 08:39:29 INFO Robot ] Done!
+[ 08:39:29 INFO Robot ] Received type 3 with topic 2
+[ 08:39:29 INFO Robot ] Setting motor speeds to -0.10019588470458984,-0.25072669982910156
