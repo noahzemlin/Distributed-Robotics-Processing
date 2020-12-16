@@ -5,3 +5,4 @@ Python documentation:
  - https://docs.python.org/3/howto/sockets.html
  - https://docs.python.org/3/library/enum.html
  - https://pymotw.com/2/select/
+ - https://docs.python.org/3/howto/logging-cookbook.html

@@ -14,9 +14,8 @@ from threading import Thread, Lock
 HOST = "127.0.0.1"
 PORT = 9000 + random.randint(1, 100)
 
-# Define Enums
-
-class TopicTypes(Enum):
+# Define Enums used for networking
+class TopicType(Enum):
     STATE = 0
     EKF_OUT = 1
     COMMAND = 2
@@ -40,33 +39,48 @@ class MessageType(Enum):
         return struct.unpack('I I 128s', data)
 
 class ServiceServer(Thread):
-
-    # Server thread to handle networking
     def __init__(self, logger, recv_func):
+        '''
+        Server thread that is ran on the robot
+
+        logger: logger to log info,errors,warnings to
+        recv_func: function that is called when a subscribed topic is published to
+        '''
         Thread.__init__(self)
 
         self.logger = logger
         self.recv_func = recv_func
 
+        # TCP socket server
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.socket.bind(("0.0.0.0", PORT))
         self.socket.listen(5)
         self.socket.setblocking(0)
         self.subscriptions = {}
 
-        # Running Lock
+        # Release to stop thread
         self.running = Lock()
         self.running.acquire()
 
-    # Handle subscribing a client
     def subscribe_client(self, client, topic):
+        '''
+        Subscribe a client to a topic id
+
+        client: socket of client
+        topic: topic number from TopicType
+        '''
         if topic in self.subscriptions:
             self.subscriptions[topic].append(client)
         else:
             self.subscriptions[topic] = [client]
 
-    # Handle publishing data sent from clients
     def publish_data(self, topic, data):
+        '''
+        Publish data to all subscribed clients
+
+        topic: topic number from TopicType
+        data: data bytes to send
+        '''
         if topic in self.subscriptions:
             for s in self.subscriptions[topic]:
                 if s is self.socket:
@@ -78,93 +92,109 @@ class ServiceServer(Thread):
                         self.outputs.append(s)
 
     def run(self):
+        '''Ran when thread is started'''
         inputs = [ self.socket ]
         self.outputs = [ ]
         self.message_queues = {}
 
         # Adapated from https://pymotw.com/2/select/
         while inputs and self.running.locked():
-            # We are using nonblocking TCP, so we use select (with 2 second timeout)
-            readable, writable, _ = select.select(inputs, self.outputs, inputs, 2)
+            # We are using nonblocking TCP, so we use select (with 1 second timeout)
+            readable, writable, _ = select.select(inputs, self.outputs, inputs, 1)
 
-            # Handle reading data (or accepting new clients) when ready
             for s in readable:
                 if s is self.socket:
-                    # A "readable" server socket is ready to accept a connection
+                    # The server socket is readable, this means we have a new connection
+
+                    # Accept new connection
                     connection, client_address = s.accept()
                     self.logger.info(f'{client_address} connected.')
                     connection.setblocking(0)
-                    inputs.append(connection)
 
-                    # Give the connection a queue for data we want to send
+                    # Add to input list to track incoming messages and prepare queue for outgoing messages
+                    inputs.append(connection)
                     self.message_queues[connection] = Queue()
                 else:
+                    # A client has sent data!
+
+                    # Read the data
                     data = s.recv(MessageType.length())
                     if data:
-                        # A readable client socket has data
+                        # If there is data, unpack it and handle it based on the message type
                         msg_type, topic, _ = MessageType.unpack(data)
 
                         self.logger.info(f"Received type {msg_type} with topic {topic}")
 
                         if msg_type == MessageType.SUBSCRIBE.value:
+                            # Client is asking to subscribe to topic
                             self.subscribe_client(s, topic)
                         elif msg_type == MessageType.PUBLISH.value:
+                            # Client is publishing a message, relay to other clients (and robot)
                             if topic in self.subscriptions:
                                 self.publish_data(topic, data)
                             else:
                                 self.logger.warning(f'{client_address} attempting to publish to topic {topic} which has no subscribers.')
                         else:
                             self.logger.error(f'Received unhandled message type {msg_type}')
-
-                        # self.message_queues[s].put(data)
-                        # # Add output channel for response
-                        # if s not in outputs:
-                        #     outputs.append(s)
                     else:
-                        # Interpret empty result as closed connection
+                        # If not data, then the client closed the connection
                         self.logger.info(f'{client_address} closed.')
-                        # Stop listening for input on the connection
+                        
+                        # Remove the client from lists, close socket, and delete queue
                         if s in self.outputs:
                             self.outputs.remove(s)
                         inputs.remove(s)
                         s.close()
-
-                        # Remove message queue
                         del self.message_queues[s]
     
             # Handle sending data when we are ready to
             for s in writable:
                 try:
+                    # Are there messages in the queue?
                     next_msg = self.message_queues[s].get_nowait()
                 except Empty:
-                    # No messages waiting so stop checking for writability.
-                    # self.logger.warning(f'Output queue for {s.getpeername()} is empty')
+                    # No, there are no messages. Remove from outputs and wait for queue to be populated again
                     self.outputs.remove(s)
                 else:
-                    #self.logger.info(f'Sending {next_msg} from {s.getpeername()}')
+                    # Yes, it is! Send the message
                     s.send(next_msg)
 
+        # Close socket at end
         self.socket.close()
 
 class ClientSocket(Thread):
-
-    # Server thread to handle networking
     def __init__(self, logger, recv_func):
+        '''
+        Client thread that is ran on nodes
+
+        logger: logger to log info,errors,warnings to
+        recv_func: function that is called when a subscribed topic is published to
+        '''
         Thread.__init__(self)
         self.logger = logger
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.recv_func = recv_func
 
-        # Running Lock
+        # Release to stop thread
         self.running = Lock()
         self.running.acquire()
     
     def send(self, msg_type, topic, data=b""):
+        '''
+        Send message to the server
+
+        msg_type: message type from MessageType
+        topic: topic from TopicType
+        data: data bytes to send
+        '''
         self.socket.send(MessageType.pack(msg_type, topic, data))
     
     def run(self):
+        '''Ran when thread is started'''
+        # Connect to robot server
         self.socket.connect((HOST, PORT))
 
+        # As long as we are still running, wait for new data and handle it
         while self.running.locked():
             msg = self.socket.recv(MessageType.length())
             self.recv_func(MessageType.unpack(msg))
@@ -173,9 +203,14 @@ class ClientSocket(Thread):
 
 class Machine(Thread):
     def __init__(self, machine_name):
+        '''
+        Node thread that actually runs the node's code
+
+        machine_name: name for logging
+        '''
         Thread.__init__(self)
 
-        # Logging
+        # Setup logging (https://docs.python.org/3/howto/logging-cookbook.html)
         self.logger = logging.getLogger(machine_name)
         self.logger.setLevel(logging.DEBUG)
         fh = logging.FileHandler(machine_name + '.log')
@@ -204,65 +239,73 @@ class Machine(Thread):
         self.running.acquire()
 
     def subscribe(self, topic):
+        '''Subscribe to a topic'''
         self.socket.send(MessageType.SUBSCRIBE, topic)
 
     def publish(self, topic, data):
+        '''Publish to a topic'''
         self.socket.send(MessageType.PUBLISH, topic, data)
 
-    # Override with receiving logic when subscribing
     def recv(self):
+        '''Override with receiving logic when subscribing'''
         pass
 
 class M_Robot(Machine):
     def __init__(self):
+        '''Robot thread'''
         Machine.__init__(self, "Robot")
         self.logger.info("Started")
 
     def recv(self, recv_vals):
+        '''Handle receiving messages'''
         (msg_type, topic, data) = recv_vals
 
-        if topic == TopicTypes.COMMAND.value:
+        if topic == TopicType.COMMAND.value:
             l,r = struct.unpack("f f 120x", data)
             self.logger.info(f"Setting motor speeds to {l},{r}")
 
     def run(self):
+        '''Ran when thread is started'''
         self.logger.info("Running")
         self.server = ServiceServer(self.logger, self.recv)
         self.server.start()
 
         # Subscribe robot to movement commands
         # This is kinda hacky and prob could be improved
-        self.server.subscriptions[TopicTypes.COMMAND.value] = [self.server.socket]
+        self.server.subscriptions[TopicType.COMMAND.value] = [self.server.socket]
 
         while self.running.locked():
             time.sleep(0.2)
             self.state["x"] = self.state["x"] + random.random() + 0.2
             self.state["y"] = self.state["y"] + random.random() + 0.6
-            self.server.publish_data(TopicTypes.STATE.value, MessageType.pack(MessageType.PUBLISH, TopicTypes.STATE, struct.pack('f f f f 112x', self.state["x"], self.state["y"], self.state["x_dot"], self.state["y_dot"])))
+            self.server.publish_data(TopicType.STATE.value, MessageType.pack(MessageType.PUBLISH, TopicType.STATE, struct.pack('f f f f 112x', self.state["x"], self.state["y"], self.state["x_dot"], self.state["y_dot"])))
 
         self.server.running.release()
         self.logger.info("Done!")
 
 class M_EKF(Machine):
     def __init__(self):
+        '''EKF thread'''
         Machine.__init__(self, "EKF")
         self.logger.info("Started")
 
     def recv(self, recv_vals):
+        '''Handle receiving messages'''
         (msg_type, topic, data) = recv_vals
 
-        if topic == TopicTypes.STATE.value:
+        if topic == TopicType.STATE.value:
             # Update state based on incoming update (only care about x and y here, we compute x_dot an y_dot)
             x,y,_,_ = struct.unpack('f f f f 112x', data)
             self.state["x"] = x
             self.state["y"] = y
         
     def run(self):
+        '''Ran when thread is started'''
         self.logger.info("Running")
         self.socket.start()
 
         # Subscribe to receive state updates
-        self.subscribe(TopicTypes.STATE)
+        self.subscribe(TopicType.STATE)
         
         last_x = self.state["x"]
         last_y = self.state["y"]
@@ -273,7 +316,7 @@ class M_EKF(Machine):
             self.state["y_dot"] = (self.state["y"] - last_y) / 0.5
             last_x = self.state["x"]
             last_y = self.state["y"]
-            self.publish(TopicTypes.EKF_OUT, struct.pack('f f f f 112x', self.state["x"], self.state["y"], self.state["x_dot"], self.state["y_dot"]))
+            self.publish(TopicType.EKF_OUT, struct.pack('f f f f 112x', self.state["x"], self.state["y"], self.state["x_dot"], self.state["y_dot"]))
             self.logger.info(f"New state: {self.state}")
 
         self.socket.running.release()
@@ -281,14 +324,15 @@ class M_EKF(Machine):
 
 class M_PathPlanning(Machine):
     def __init__(self):
+        '''Path planning thread'''
         Machine.__init__(self, "PathPlanning")
         self.logger.info("Started")
-        self.socket = ClientSocket(self.logger, self.recv)
 
     def recv(self, recv_vals):
+        '''Handle receiving messages'''
         (msg_type, topic, data) = recv_vals
 
-        if topic == TopicTypes.EKF_OUT.value:
+        if topic == TopicType.EKF_OUT.value:
             # Update state based on incoming update
             x,y,x_dot,y_dot = struct.unpack('f f f f 112x', data)
             self.state = {
@@ -299,17 +343,18 @@ class M_PathPlanning(Machine):
             }
         
     def run(self):
+        '''Ran when thread is started'''
         self.logger.info("Running")
         self.socket.start()
 
         # Subscribe to receive state updates
-        self.subscribe(TopicTypes.EKF_OUT)
+        self.subscribe(TopicType.EKF_OUT)
         
         while self.running.locked():
             time.sleep(0.5)
 
             # Create command based on state
-            self.publish(TopicTypes.COMMAND, struct.pack('f f 120x', -self.state["x_dot"]/10, -self.state["y_dot"]/10))
+            self.publish(TopicType.COMMAND, struct.pack('f f 120x', -self.state["x_dot"]/10, -self.state["y_dot"]/10))
 
         self.socket.running.release()
         self.logger.info("Done!")
@@ -341,6 +386,7 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print('\nKeyboard Interrupt Called')
         try:
+            # On keyboard interrupt, stop all threads
             for thrd in threads:
                 threads[thrd].running.release()
         except SystemExit:
